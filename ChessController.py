@@ -9,37 +9,88 @@ IMPORTANT FOR TEAM:
 """
 
 import sys
-import pygame
 from abc import ABC, abstractmethod
+import pygame
 
 
 class ChessController(ABC):
+    """
+    Abstract representation of Chess Controller.
+    """
+
     def __init__(self, board):
+        """
+        Initializes controller.
+
+        Args:
+            board: a ChessModel instance.
+
+        Attributes:
+            _board: a ChessModel instance representing the board for the game.
+        """
         self._board = board
 
     @property
     def board(self):
+        """
+        Getter for board.
+
+        Returns:
+            a ChessModel instance representing the current state of the board.
+        """
         return self._board
 
     @abstractmethod
     def move(self):
+        """
+        Abstract method for making a move in the game.
+        """
         pass
 
 
 class GameController(ChessController):
+    """
+    Controller Class to run whole chess game, including drag and drop
+    functionality.
+    """
+
     def __init__(self, board, view):
+        """
+        Initializes controller.
+
+        Args:
+            board: a ChessModel instance.
+            view: a ChessView instance.
+
+        Attributes:
+            _board: a ChessModel instance representing the board for the game.
+            _view: a ChessView instance representing the view of the game.
+            _state: a string representing the current state of the game.
+        """
         super().__init__(board)
         self._view = view
         self._state = "menu"
 
     @property
     def view(self):
+        """
+        Getter for _view attribute.
+
+        Returns:
+            a ChessView instance representing the current view of the game.
+        """
         return self._view
 
     def move(self):
         pass
 
     def start_mode(self, mode_key):
+        """
+        Sets the mode of the game.
+
+        Args:
+            mode_key: a string representing the game mode to be played.
+        """
         if mode_key == "one_player":
             self.board.start_game("one_player")
             self.board.set_stockfish(self.board.maybe_make_stockfish())
@@ -53,11 +104,23 @@ class GameController(ChessController):
         self._state = "game"
 
     def handle_menu_click(self, mouse_pos):
+        """
+        Parses click to choose game mode in menu.
+
+        Args:
+            mouse_pos: a tuple representing the position of the mouse.
+        """
         choice = self.view.get_menu_choice(mouse_pos)
         if choice is not None:
             self.start_mode(choice)
 
     def handle_mouse_down(self, mouse_pos):
+        """
+        Detects click on board to begin dragging motion.
+
+        Args:
+            mouse_pos: a tuple representing the position of the mouse.
+        """
         board_pos = self.view.pixel_to_board(mouse_pos)
         if board_pos is None:
             return
@@ -77,10 +140,22 @@ class GameController(ChessController):
         self.board.begin_drag(col, row, mouse_pos)
 
     def handle_mouse_motion(self, mouse_pos):
+        """
+        Updates mouse position on model side as user moves mouse.
+
+        Args:
+            mouse_pos: a tuple representing the position of the mouse.
+        """
         if self.board.dragging:
             self.board.update_drag(mouse_pos)
 
     def handle_mouse_up(self, mouse_pos):
+        """
+        Detects release of the mouse and stops dragging.
+
+        Args:
+            mouse_pos: a tuple representing the position of the mouse.
+        """
         if not self.board.dragging:
             return
 
@@ -111,6 +186,9 @@ class GameController(ChessController):
         self.board.reset_selection()
 
     def run(self):
+        """
+        Begins running the game through the pygame window created by ChessView.
+        """
         clock = pygame.time.Clock()
 
         while True:

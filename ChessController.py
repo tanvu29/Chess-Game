@@ -1,11 +1,5 @@
 """
 Controller class to handle game logic.
-
-IMPORTANT FOR TEAM:
-- Event handling goes here.
-- Drag/drop behavior goes here.
-- Menu flow goes here.
-- Core chess rules should live in ChessModel.py.
 """
 
 import sys
@@ -14,113 +8,83 @@ import pygame
 
 
 class ChessController(ABC):
-    """
-    Abstract representation of Chess Controller.
-    """
-
     def __init__(self, board):
-        """
-        Initializes controller.
-
-        Args:
-            board: a ChessModel instance.
-
-        Attributes:
-            _board: a ChessModel instance representing the board for the game.
-        """
         self._board = board
 
     @property
     def board(self):
-        """
-        Getter for board.
-
-        Returns:
-            a ChessModel instance representing the current state of the board.
-        """
         return self._board
 
     @abstractmethod
     def move(self):
-        """
-        Abstract method for making a move in the game.
-        """
         pass
 
 
 class GameController(ChessController):
-    """
-    Controller Class to run whole chess game, including drag and drop
-    functionality.
-    """
-
     def __init__(self, board, view):
-        """
-        Initializes controller.
-
-        Args:
-            board: a ChessModel instance.
-            view: a ChessView instance.
-
-        Attributes:
-            _board: a ChessModel instance representing the board for the game.
-            _view: a ChessView instance representing the view of the game.
-            _state: a string representing the current state of the game.
-        """
         super().__init__(board)
         self._view = view
         self._state = "menu"
 
     @property
     def view(self):
-        """
-        Getter for _view attribute.
-
-        Returns:
-            a ChessView instance representing the current view of the game.
-        """
         return self._view
 
     def move(self):
         pass
 
-    def start_mode(self, mode_key):
-        """
-        Sets the mode of the game.
-
-        Args:
-            mode_key: a string representing the game mode to be played.
-        """
+    def start_mode(self, mode_key, stockfish_level=None):
         if mode_key == "one_player":
             self.board.start_game("one_player")
             self.board.set_stockfish(self.board.maybe_make_stockfish())
+            if stockfish_level is not None:
+                self.board.configure_stockfish(stockfish_level)
         elif mode_key == "two_player":
             self.board.start_game("two_player")
             self.board.set_stockfish(None)
         elif mode_key == "chess960":
             self.board.start_game("chess960")
             self.board.set_stockfish(None)
+        elif mode_key == "sandbox":
+            self.board.start_game("sandbox")
+            self.board.set_stockfish(None)
 
         self._state = "game"
 
     def handle_menu_click(self, mouse_pos):
-        """
-        Parses click to choose game mode in menu.
-
-        Args:
-            mouse_pos: a tuple representing the position of the mouse.
-        """
-        choice = self.view.get_menu_choice(mouse_pos)
-        if choice is not None:
-            self.start_mode(choice)
+        if self._state == "menu":
+            choice = self.view.get_menu_choice(mouse_pos)
+            if choice == "one_player":
+                self._state = "difficulty_menu"
+            elif choice is not None:
+                self.start_mode(choice)
+        elif self._state == "difficulty_menu":
+            difficulty = self.view.get_difficulty_choice(mouse_pos)
+            if difficulty is not None:
+                self.start_mode("one_player", stockfish_level=difficulty)
 
     def handle_mouse_down(self, mouse_pos):
-        """
-        Detects click on board to begin dragging motion.
+        if self.board.promotion_pending:
+            choice = self.view.get_promotion_choice(mouse_pos, self.board.promotion_pending[2])
+            if choice is not None:
+                self.board.promote_pawn(choice)
+                if self.board.mode == "one_player" and self.board.turn == "b":
+                    pygame.display.flip()
+                    pygame.time.wait(150)
+                    self.board.apply_stockfish_move()
+            return
 
-        Args:
-            mouse_pos: a tuple representing the position of the mouse.
-        """
+        if self.board.mode == "sandbox":
+            if self.view.sandbox_toggle_rect.collidepoint(mouse_pos):
+                self.board.toggle_sandbox_side()
+                return
+
+            palette_choice = self.view.get_sandbox_palette_choice(mouse_pos)
+            if palette_choice is not None:
+                piece_name, color = palette_choice
+                self.board.begin_palette_drag(piece_name, color, mouse_pos)
+                return
+
         board_pos = self.view.pixel_to_board(mouse_pos)
         if board_pos is None:
             return
@@ -132,7 +96,7 @@ class GameController(ChessController):
             self.board.reset_selection()
             return
 
-        if piece.color != self.board.turn:
+        if self.board.mode != "sandbox" and piece.color != self.board.turn:
             return
 
         self.board.selected = (col, row)
@@ -140,28 +104,27 @@ class GameController(ChessController):
         self.board.begin_drag(col, row, mouse_pos)
 
     def handle_mouse_motion(self, mouse_pos):
-        """
-        Updates mouse position on model side as user moves mouse.
-
-        Args:
-            mouse_pos: a tuple representing the position of the mouse.
-        """
         if self.board.dragging:
             self.board.update_drag(mouse_pos)
 
     def handle_mouse_up(self, mouse_pos):
-        """
-        Detects release of the mouse and stops dragging.
+        if self.board.promotion_pending:
+            return
 
-        Args:
-            mouse_pos: a tuple representing the position of the mouse.
-        """
         if not self.board.dragging:
             return
 
-        start = self.board.drag_from
         board_pos = self.view.pixel_to_board(mouse_pos)
 
+        if self.board.drag_source == "palette":
+            if board_pos is not None:
+                col, row = board_pos
+                self.board.set_piece(col, row, self.board.drag_piece)
+            self.board.clear_drag()
+            self.board.reset_selection()
+            return
+
+        start = self.board.drag_from
         if start is None:
             self.board.clear_drag()
             self.board.reset_selection()
@@ -177,18 +140,19 @@ class GameController(ChessController):
                 self.board.clear_drag()
                 self.board.reset_selection()
 
+                if self.board.promotion_pending:
+                    return
+
                 if self.board.mode == "one_player" and self.board.turn == "b":
+                    pygame.display.flip()
+                    pygame.time.wait(150)
                     self.board.apply_stockfish_move()
                 return
 
-        # Illegal drop -> snap back automatically
         self.board.clear_drag()
         self.board.reset_selection()
 
     def run(self):
-        """
-        Begins running the game through the pygame window created by ChessView.
-        """
         clock = pygame.time.Clock()
 
         while True:
@@ -197,7 +161,7 @@ class GameController(ChessController):
                     pygame.quit()
                     sys.exit()
 
-                if self._state == "menu":
+                if self._state in ("menu", "difficulty_menu"):
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         self.handle_menu_click(event.pos)
 
@@ -205,14 +169,30 @@ class GameController(ChessController):
                     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                         self.handle_mouse_down(event.pos)
 
+                    elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                        if self.board.mode == "sandbox":
+                            board_pos = self.view.pixel_to_board(event.pos)
+                            if board_pos is not None:
+                                col, row = board_pos
+                                self.board.clear_square(col, row)
+
                     elif event.type == pygame.MOUSEMOTION:
                         self.handle_mouse_motion(event.pos)
 
                     elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                         self.handle_mouse_up(event.pos)
 
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            self._state = "menu"
+                            self.board.clear_drag()
+                            self.board.reset_selection()
+                            self.board.clear_promotion()
+
             if self._state == "menu":
                 self.view.draw_menu()
+            elif self._state == "difficulty_menu":
+                self.view.draw_difficulty_menu()
             else:
                 self.view.display()
 

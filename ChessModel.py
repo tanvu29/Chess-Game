@@ -1,97 +1,186 @@
 """
 Model class to represent the board, pieces, and game rules.
-
-IMPORTANT FOR TEAM:
-- Put board state here.
-- Put move legality helpers here.
-- Put Stockfish integration here.
-- Put Chess960 setup here.
-- Keep ChessPiece.py for raw piece movement patterns only.
-- Keep ChessView.py for drawing only.
-- Keep ChessController.py for event handling only.
 """
 
 import os
+import sys
 import random
 import subprocess
 from ChessPiece import Pawn, Knight, Bishop, Queen, King, Rook
 
 
+def resource_path(relative_path):
+    """
+    Return an absolute path for assets both in development and in a PyInstaller build.
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+
 class StockfishAPI:
     """
-    Minimal Stockfish bridge.
+    Direct UCI subprocess wrapper around the Stockfish engine executable.
 
-    Stockfish is a free and open-source chess engine widely considered as one
-    of the strongest engines for many years. To learn more about Stockfish,
-    visit https://en.wikipedia.org/wiki/Stockfish_(chess).
-
-    Put stockfish.exe at:
+    IMPORTANT:
+    You need the actual engine binary, for example:
         stockfish/stockfish.exe
-
-    Attributes:
-        engine_path: a string representing the path to access Stockfish.
-        process: Popen instance used to communicate with Stockfish.
     """
 
-    def __init__(self, engine_path="stockfish/stockfish.exe"):
-        """
-        Initializes Stockfish bridge class
-        """
-        self.engine_path = engine_path
+    def __init__(self, engine_path=None):
         self.process = None
+        self.skill_level = 10
+        self.search_depth = 10
+        self.status = "Stockfish not initialized"
 
-        if os.path.exists(engine_path):
+        candidate_paths = []
+
+        if engine_path is not None:
+            candidate_paths.append(resource_path(engine_path))
+
+        candidate_paths.extend([
+            resource_path("stockfish/stockfish.exe"),
+            resource_path("stockfish.exe"),
+            resource_path("stockfish/stockfish-windows-x86-64.exe"),
+            resource_path("stockfish/stockfish-windows-x86-64-avx2.exe"),
+            resource_path("stockfish/stockfish-windows-x86-64-sse41-popcnt.exe"),
+        ])
+
+        found_path = None
+        for path in candidate_paths:
+            if os.path.exists(path):
+                found_path = path
+                break
+
+        if found_path is None:
+            self.status = "stockfish engine executable not found"
+            return
+
+        try:
             self.process = subprocess.Popen(
-                engine_path,
+                [found_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                text=True,
                 universal_newlines=True,
-                bufsize=1,
+                bufsize=1
             )
+
             self.send_command("uci")
+            if not self._wait_for("uciok", timeout_lines=200):
+                self.status = "stockfish did not respond to UCI"
+                self.close()
+                return
+
             self.send_command("isready")
+            if not self._wait_for("readyok", timeout_lines=200):
+                self.status = "stockfish not ready"
+                self.close()
+                return
+
+            self.status = f"Stockfish loaded: {os.path.basename(found_path)}"
+            self.set_strength(skill_level=10, search_depth=10, chess960=False)
+
+        except Exception as e:
+            self.process = None
+            self.status = f"Stockfish launch failed: {e}"
+
+    def close(self):
+        if self.process is not None:
+            try:
+                self.send_command("quit")
+            except Exception:
+                pass
+            self.process = None
 
     def send_command(self, command):
-        """
-        Method to send commands to Stockfish
-
-        Args:
-            command: a string representing the command to send to Stockfish API.
-        """
-        if self.process is None:
+        if self.process is None or self.process.stdin is None:
             return
         self.process.stdin.write(command + "\n")
         self.process.stdin.flush()
 
-    def get_best_move(self, fen, depth=10):
-        """
-        Obtains best move from Stockfise for given position evaluated at a
-        certain depth.
+    def _wait_for(self, target, timeout_lines=200):
+        if self.process is None or self.process.stdout is None:
+            return False
 
-        Args:
-            fen: a string representation of the entire board used to communicate
-                with Stockfish
-            depth: an int representing the depth of moves for which Stockfish
-                will evaluate in order to fine the best move.
+        for _ in range(timeout_lines):
+            line = self.process.stdout.readline()
+            if not line:
+                continue
+            line = line.strip()
+            if line == target or target in line:
+                return True
+        return False
 
-        Returns:
-            A string representing the best move evaluated by Stockfist, or None
-            if process is None.
+    def set_strength(self, skill_level=10, search_depth=10, chess960=False):
         """
+        Configure engine difficulty.
+
+        This version makes difficulties feel more different by using:
+        - Skill Level
+        - Limited strength mode
+        - Elo caps for weaker settings
+        - movetime differences in get_best_move()
+        """
+        self.skill_level = max(0, min(20, int(skill_level)))
+        self.search_depth = max(1, int(search_depth))
+
         if self.process is None:
+            return
+
+        self.send_command(f"setoption name Skill Level value {self.skill_level}")
+
+        if self.skill_level <= 5:
+            self.send_command("setoption name UCI_LimitStrength value true")
+            self.send_command("setoption name UCI_Elo value 800")
+        elif self.skill_level <= 10:
+            self.send_command("setoption name UCI_LimitStrength value true")
+            self.send_command("setoption name UCI_Elo value 1200")
+        elif self.skill_level <= 15:
+            self.send_command("setoption name UCI_LimitStrength value true")
+            self.send_command("setoption name UCI_Elo value 1600")
+        else:
+            self.send_command("setoption name UCI_LimitStrength value false")
+
+        self.send_command(f"setoption name UCI_Chess960 value {'true' if chess960 else 'false'}")
+        self.send_command("isready")
+        self._wait_for("readyok", timeout_lines=200)
+
+    def get_best_move(self, fen):
+        if self.process is None or self.process.stdout is None:
             return None
 
-        self.send_command(f"position fen {fen}")
-        self.send_command(f"go depth {depth}")
+        try:
+            self.send_command(f"position fen {fen}")
 
-        while True:
-            line = self.process.stdout.readline().strip()
-            if line.startswith("bestmove"):
-                parts = line.split()
-                if len(parts) >= 2:
-                    return parts[1]
-                return None
+            # Difficulty difference is mostly driven here
+            if self.skill_level <= 5:
+                self.send_command("go movetime 50")
+            elif self.skill_level <= 10:
+                self.send_command("go movetime 150")
+            elif self.skill_level <= 15:
+                self.send_command("go movetime 400")
+            else:
+                self.send_command("go movetime 1000")
+
+            for _ in range(500):
+                line = self.process.stdout.readline()
+                if not line:
+                    continue
+                line = line.strip()
+                if line.startswith("bestmove"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return parts[1]
+                    return None
+
+            self.status = "Stockfish returned no move"
+            return None
+
+        except Exception as e:
+            self.status = f"Engine move failed: {e}"
+            return None
 
 
 class ChessModel:
@@ -100,31 +189,6 @@ class ChessModel:
     """
 
     def __init__(self):
-        """
-        Initializes ChessModel instance
-
-        Attributes:
-            _board: a list of lists representing the spaces on a chess board.
-            _turn: a string representing the color of whose turn it is.
-            _move_number: an int tracking the move number of the game.
-            _captured_pieces: a dictionary mapping each player's respective
-                color to their pieces which they have lost in the game.
-            _move_history: a list representing the move history on the board.
-            _selected: a Piece instance when a piece is selected on the UI, or
-                None if otherwise.
-            _legal_moves: a list representing the legal moves of a selected
-                piece on the board.
-            _mode: a string representing the mode for the given game.
-            _stockfish: an instance of StockfishAPI(?).
-            _dragging: a boolean indicating whether or not a piece is being
-                dragged.
-            _drag_piece: a Piece instance representing the piece which is being
-                dragged; None if a piece isn't being dragged.
-            _drag_from: a tuple representing the position from which the piece
-                is being dragged from; None if a piece isn't being dragged.
-            _drag_mouse_pos: a tuple representing the position of the mouse as
-                it is dragging a piece; None if a piece isn't being dragged.
-        """
         self._board = [[None] * 8 for _ in range(8)]
         self._turn = "w"
         self._move_number = 1
@@ -134,16 +198,23 @@ class ChessModel:
         self._legal_moves = []
         self._mode = None
         self._stockfish = None
+        self._stockfish_label = "Medium"
+        self._engine_status = "No engine"
 
         self._dragging = False
         self._drag_piece = None
         self._drag_from = None
         self._drag_mouse_pos = None
+        self._drag_source = None
+
+        self._promotion_pending = None
+        self._sandbox_side_to_move = "w"
+
+    # ----------------------------
+    # Setup
+    # ----------------------------
 
     def setup_standard(self):
-        """
-        Sets ChessModel instance to set up for conventional chess.
-        """
         self._board = [[None] * 8 for _ in range(8)]
         self._turn = "w"
         self._move_number = 1
@@ -151,6 +222,7 @@ class ChessModel:
         self._move_history = []
         self.reset_selection()
         self.clear_drag()
+        self.clear_promotion()
 
         back_rank = [Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook]
 
@@ -162,12 +234,18 @@ class ChessModel:
             self._board[1][col] = Pawn("w")
             self._board[6][col] = Pawn("b")
 
+    def setup_sandbox(self):
+        self._board = [[None] * 8 for _ in range(8)]
+        self._turn = "w"
+        self._move_number = 1
+        self._captured_pieces = {"w": [], "b": []}
+        self._move_history = []
+        self._sandbox_side_to_move = "w"
+        self.reset_selection()
+        self.clear_drag()
+        self.clear_promotion()
+
     def setup_chess960(self):
-        """
-        Sets ChessModel instance to set up for the chess variant Chess960, also
-        known as Fischer Random or Freestyle Chess. To learn more about Chess960,
-        visit https://en.wikipedia.org/wiki/Chess960.
-        """
         self._board = [[None] * 8 for _ in range(8)]
         self._turn = "w"
         self._move_number = 1
@@ -175,6 +253,7 @@ class ChessModel:
         self._move_history = []
         self.reset_selection()
         self.clear_drag()
+        self.clear_promotion()
 
         layout = self._generate_960_back_rank()
 
@@ -187,15 +266,6 @@ class ChessModel:
             self._board[6][col] = Pawn("b")
 
     def _generate_960_back_rank(self):
-        """
-        Generates the back row of pieces for Chess960. Chess 960 randomizes the
-        back row of pieces according to the following rules:
-        - The bishops must be on opposite colors.
-        - The king must be in between the two rooks to allow for castling.
-
-        Returns:
-            A list containing the randomized order of pieces for the back row.
-        """
         layout = [None] * 8
 
         dark_squares = [0, 2, 4, 6]
@@ -223,51 +293,75 @@ class ChessModel:
         return layout
 
     def start_game(self, mode):
-        """
-        Starts the game on the board by setting the _mode attribute and putting
-        pieces onto the board.
-
-        Args:
-            mode: a string representing the game mode to be played.
-        """
         self._mode = mode
         if mode == "chess960":
             self.setup_chess960()
+        elif mode == "sandbox":
+            self.setup_sandbox()
         else:
             self.setup_standard()
 
+    # ----------------------------
+    # Stockfish
+    # ----------------------------
+
     def maybe_make_stockfish(self):
-        """
-        Function to maybe use Stockfish to have a one player game.
-        """
         api = StockfishAPI()
+        self._engine_status = api.status
+        print("STOCKFISH STATUS:", api.status)
         return api if api.process is not None else None
 
     def set_stockfish(self, stockfish_api):
-        """
-        Setter to _stockfish to add Stockfish API to model
-
-        Args:
-            stockfish_api: a StockFishAPI instance used to communicate to
-                Stockfish
-        """
         self._stockfish = stockfish_api
+        if stockfish_api is None:
+            self._engine_status = "No engine loaded"
+        else:
+            self._engine_status = stockfish_api.status
 
-    def apply_stockfish_move(self):
-        """
-        Uses Stockfish to play a move without user input.
-        """
-        if self._mode != "one_player":
-            return
+    def configure_stockfish(self, label):
+        self._stockfish_label = label
 
         if self._stockfish is None:
+            self._engine_status = "Stockfish unavailable"
             return
+
+        presets = {
+            "Easy": (3, 1),
+            "Medium": (8, 4),
+            "Hard": (15, 8),
+            "Max": (20, 12),
+        }
+
+        skill, depth = presets.get(label, (8, 4))
+        use_960 = self._mode == "chess960"
+        self._stockfish.set_strength(skill_level=skill, search_depth=depth, chess960=use_960)
+        self._engine_status = f"Engine ready ({label})"
+
+    @property
+    def stockfish_label(self):
+        return self._stockfish_label
+
+    @property
+    def engine_status(self):
+        return self._engine_status
+
+    def apply_stockfish_move(self):
+        if self._mode != "one_player":
+            return False
+
+        if self._stockfish is None:
+            self._engine_status = "Stockfish unavailable"
+            return False
+
+        if self.promotion_pending:
+            return False
 
         fen = self.board_to_fen()
         bestmove = self._stockfish.get_best_move(fen)
 
         if bestmove is None or len(bestmove) < 4:
-            return
+            self._engine_status = "Stockfish returned no move"
+            return False
 
         start = bestmove[:2]
         end = bestmove[2:4]
@@ -277,264 +371,258 @@ class ChessModel:
 
         piece = self.get_piece(start_col, start_row)
         if piece is None:
-            return
+            self._engine_status = f"Invalid engine move: {bestmove}"
+            return False
 
         legal = piece.valid_moves(start_col, start_row, self)
-        if (end_col, end_row) in legal:
-            self.move_piece(start_col, start_row, end_col, end_row)
-            self.reset_selection()
+        if (end_col, end_row) not in legal:
+            self._engine_status = f"Illegal engine move blocked: {bestmove}"
+            return False
+
+        moved = self.move_piece(start_col, start_row, end_col, end_row)
+        if not moved:
+            self._engine_status = f"Engine failed to move: {bestmove}"
+            return False
+
+        self.reset_selection()
+        self._engine_status = f"Engine played: {bestmove}"
+
+        if self.promotion_pending is not None:
+            self.promote_pawn("Queen")
+
+        return True
+
+    # ----------------------------
+    # Properties
+    # ----------------------------
 
     @property
     def mode(self):
-        """
-        Getter for game mode.
-
-        Returns:
-            a string representing the current game mode (chess960 or otherwise).
-        """
         return self._mode
 
     @property
     def board(self):
-        """
-        Getter for physical board state
-
-        Returns:
-            a list of lists representing the current state of the chess board.
-        """
         return self._board
 
     @property
     def turn(self):
-        """
-        Getter for whose turn it is
-
-        Returns:
-            a string represnting whose turn it is.
-        """
         return self._turn
 
     @property
     def selected(self):
-        """
-        Getter for currently selected piece.
-
-        Returns:
-            a Piece instance of the currently selected piece.
-        """
         return self._selected
 
     @selected.setter
     def selected(self, value):
-        """
-        Sets _selected to given piece.
-
-        Args:
-            value: a Piece instance.
-        """
         self._selected = value
 
     @property
     def legal_moves(self):
-        """
-        Getter for legal moves at current state
-
-        Returns:
-            a list representing all legal moves.
-        """
         return self._legal_moves
 
     @legal_moves.setter
     def legal_moves(self, value):
-        """
-        Sets _legal_moves to given moves.
-
-        Args:
-            value: a list representing the legal moves at the current state.
-        """
         self._legal_moves = value
 
     @property
     def dragging(self):
-        """
-        Getter for dragging status.
-
-        Returns:
-            a boolean representing whether or not a piece is currently being
-            dragged.
-        """
         return self._dragging
 
     @property
     def drag_piece(self):
-        """
-        Getter for piece being dragged
-
-        Returns:
-            a Piece instance representing the one currently being dragged.
-        """
         return self._drag_piece
 
     @property
     def drag_from(self):
-        """
-        Getter for original position of a dragged piece.
-
-        Returns:
-            A tuple representing the position from which a piece was dragged.
-        """
         return self._drag_from
 
     @property
     def drag_mouse_pos(self):
-        """
-        Getter for the current mouse position.
-
-        Returns:
-            A tuple representing the current mouse position.
-        """
         return self._drag_mouse_pos
 
     @property
-    def move_history(self):
-        """
-        Getter for the move history.
+    def drag_source(self):
+        return self._drag_source
 
-        Returns:
-            A list representing the move history of the board.
-        """
+    @property
+    def move_history(self):
         return self._move_history
 
+    @property
+    def promotion_pending(self):
+        return self._promotion_pending
+
+    @property
+    def sandbox_side_to_move(self):
+        return self._sandbox_side_to_move
+
+    # ----------------------------
+    # Drag state
+    # ----------------------------
+
     def begin_drag(self, col, row, mouse_pos):
-        """
-        Initiates instance to be in a dragging state.
-
-        Args:
-            col: an int representing the column of the position of the piece to
-                be dragged.
-            row: an int representing the row of the position of the piece to be
-                dragged.
-            mouse_pos: a tuple representing the position of the mouse.
-
-        Returns:
-            A boolean representing whether or not the dragging motion is
-            happening or not.
-        """
         piece = self.get_piece(col, row)
         if piece is None:
             return False
+
         self._dragging = True
         self._drag_piece = piece
         self._drag_from = (col, row)
         self._drag_mouse_pos = mouse_pos
+        self._drag_source = "board"
+        return True
+
+    def begin_palette_drag(self, piece_name, color, mouse_pos):
+        piece = self.create_piece_by_name(piece_name, color)
+        if piece is None:
+            return False
+
+        self._dragging = True
+        self._drag_piece = piece
+        self._drag_from = None
+        self._drag_mouse_pos = mouse_pos
+        self._drag_source = "palette"
         return True
 
     def update_drag(self, mouse_pos):
-        """
-        Updates mouse position while dragging.
-
-        Args:
-            mouse_pos: a tuple representing the position of the mouse.
-        """
         self._drag_mouse_pos = mouse_pos
 
     def clear_drag(self):
-        """
-        Sets board state attributes back to not dragging.
-        """
         self._dragging = False
         self._drag_piece = None
         self._drag_from = None
         self._drag_mouse_pos = None
+        self._drag_source = None
+
+    # ----------------------------
+    # Board helpers
+    # ----------------------------
 
     def get_piece(self, col, row):
-        """
-        Gets the piece at a certain position.
-
-        Args:
-            col: an int representing a column of the chess board
-            row: an int representing a row of the chess board
-
-        Returns:
-            A Piece instance at that position, or None if there is no piece
-            there.
-        """
         if 0 <= col <= 7 and 0 <= row <= 7:
             return self._board[row][col]
         return None
 
     def set_piece(self, col, row, piece):
-        """
-        Sets the piece at a given position on the board.
-
-        Args:
-            col: an int representing a column of the chess board
-            row: an int representing a row of the chess board
-            piece: a Piece instance representing the piece to be set.
-        """
         if 0 <= col <= 7 and 0 <= row <= 7:
             self._board[row][col] = piece
 
+    def clear_square(self, col, row):
+        if 0 <= col <= 7 and 0 <= row <= 7:
+            self._board[row][col] = None
+
     def reset_selection(self):
-        """
-        Unselects a piece on the board.
-        """
         self._selected = None
         self._legal_moves = []
 
+    def create_piece_by_name(self, piece_name, color):
+        mapping = {
+            "Pawn": Pawn,
+            "Knight": Knight,
+            "Bishop": Bishop,
+            "Rook": Rook,
+            "Queen": Queen,
+            "King": King,
+        }
+        piece_cls = mapping.get(piece_name)
+        if piece_cls is None:
+            return None
+        return piece_cls(color)
+
+    # ----------------------------
+    # Promotion
+    # ----------------------------
+
+    def clear_promotion(self):
+        self._promotion_pending = None
+
+    def _check_promotion_needed(self, col, row):
+        piece = self.get_piece(col, row)
+        if not isinstance(piece, Pawn):
+            return False
+
+        if piece.color == "w" and row == 7:
+            self._promotion_pending = (col, row, piece.color)
+            return True
+
+        if piece.color == "b" and row == 0:
+            self._promotion_pending = (col, row, piece.color)
+            return True
+
+        return False
+
+    def promote_pawn(self, piece_name):
+        if self._promotion_pending is None:
+            return False
+
+        col, row, color = self._promotion_pending
+
+        mapping = {
+            "Queen": Queen,
+            "Rook": Rook,
+            "Bishop": Bishop,
+            "Knight": Knight,
+        }
+
+        piece_cls = mapping.get(piece_name)
+        if piece_cls is None:
+            return False
+
+        new_piece = piece_cls(color)
+        new_piece.has_moved = True
+        self.set_piece(col, row, new_piece)
+
+        if self._move_history:
+            suffix = {
+                "Queen": "=Q",
+                "Rook": "=R",
+                "Bishop": "=B",
+                "Knight": "=N",
+            }[piece_name]
+            self._move_history[-1] += suffix
+
+        self.clear_promotion()
+        return True
+
+    # ----------------------------
+    # Sandbox helpers
+    # ----------------------------
+
+    def toggle_sandbox_side(self):
+        self._sandbox_side_to_move = "b" if self._sandbox_side_to_move == "w" else "w"
+
+    def get_sandbox_state_label(self):
+        side = "White" if self._sandbox_side_to_move == "w" else "Black"
+        return f"State for {side} to move: not implemented"
+
+    # ----------------------------
+    # Move legality
+    # ----------------------------
+
     def is_legal_move(self, start_col, start_row, end_col, end_row):
-        """
-        Checks to see if a move is valid or not.
-        INCOMPLETE
-        """
         piece = self.get_piece(start_col, start_row)
         if piece is None:
             return False
 
-        if piece.color != self._turn:
+        if self._mode != "sandbox" and piece.color != self._turn:
             return False
 
         moves = piece.valid_moves(start_col, start_row, self)
         return (end_col, end_row) in moves
 
+    # ----------------------------
+    # Notation helpers
+    # ----------------------------
+
     def coord_to_alg(self, col, row):
-        """
-        Converts internal chess board array to algebraic chess notation.
-
-        Args:
-            col: an int representing a column of the chess board.
-            row: an int representing a row of the chess board.
-
-        Returns:
-            A string representing a board position in chess notation(ie a1, f8)
-        """
         return chr(ord("a") + col) + str(row + 1)
 
     def alg_to_coord(self, square):
-        """
-        Converts algebraic chess notation to internal chess array.
-
-        Args:
-            square: A string representing a board position in chess notation.
-
-        Returns:
-            col: an int representing a column of the chess board.
-            row: an int representing a row of the chess board.
-        """
         col = ord(square[0]) - ord("a")
         row = int(square[1]) - 1
         return col, row
 
     def _piece_letter(self, piece):
-        """
-        Returns piece abbreviation assigned to pieces in algebraic notation.
-
-        Args:
-            piece: a Piece instance
-
-        Returns:
-            A string representing the piece's abbreviation.
-        """
         mapping = {
             Pawn: "",
             Knight: "N",
@@ -545,29 +633,7 @@ class ChessModel:
         }
         return mapping.get(type(piece), "")
 
-    def _format_move_text(
-        self, piece, start_col, start_row, end_col, end_row, captured
-    ):
-        """
-        Formats move into algebraic chess notation.
-        NOTE: this doesn't currently include castling.
-
-        Args:
-            piece: a Piece instance representing the piece being moved.
-            start_col: an int representing a column of the starting position of
-                the piece.
-            start_row: an int representing a row of the starting position of
-                the piece.
-            end_col: an int representing a column of the ending position of the
-                piece.
-            end_row: an int representing a row of the ending position of the
-                piece.
-            captured: a boolean representing whether or not a piece was
-                captured during the move.
-
-        Returns:
-            A string with the algebraic notation of the described move.
-        """
+    def _format_move_text(self, piece, start_col, start_row, end_col, end_row, captured):
         start_sq = self.coord_to_alg(start_col, start_row)
         end_sq = self.coord_to_alg(end_col, end_row)
         prefix = self._piece_letter(piece)
@@ -582,23 +648,6 @@ class ChessModel:
         return f"{prefix}{end_sq}"
 
     def move_piece(self, start_col, start_row, end_col, end_row):
-        """
-        Moves a piece on the board.
-
-        Args:
-            start_col: an int representing a column of the starting position of
-                the piece.
-            start_row: an int representing a row of the starting position of
-                the piece.
-            end_col: an int representing a column of the ending position of the
-                piece.
-            end_row: an int representing a row of the ending position of the
-                piece.
-
-        Returns:
-            A boolean representing whether or not a piece was successfully
-            moved.
-        """
         piece = self.get_piece(start_col, start_row)
         if piece is None:
             return False
@@ -609,28 +658,28 @@ class ChessModel:
         if target is not None:
             self._captured_pieces[target.color].append(target)
 
-        move_text = self._format_move_text(
-            piece, start_col, start_row, end_col, end_row, captured
-        )
+        if self._mode != "sandbox":
+            move_text = self._format_move_text(
+                piece, start_col, start_row, end_col, end_row, captured
+            )
+            self._move_history.append(move_text)
 
         self.set_piece(end_col, end_row, piece)
         self.set_piece(start_col, start_row, None)
         piece.has_moved = True
 
-        self._move_history.append(move_text)
-        self._turn = "b" if self._turn == "w" else "w"
-        self._move_number += 1
+        if self._mode != "sandbox":
+            self._turn = "b" if self._turn == "w" else "w"
+            self._move_number += 1
+
+        self._check_promotion_needed(end_col, end_row)
         return True
 
-    def board_to_fen(self):
-        """
-        Converts the board state into a FEN string for input into Stockfish. To
-        learn more about FEN strings, visit
-        https://en.wikipedia.org/wiki/Forsyth%E2%80%93Edwards_Notation.
+    # ----------------------------
+    # FEN
+    # ----------------------------
 
-        Returns:
-            A string in the format of a FEN string.
-        """
+    def board_to_fen(self):
         fen_rows = []
 
         for row in range(7, -1, -1):

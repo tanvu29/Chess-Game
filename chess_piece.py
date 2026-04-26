@@ -10,7 +10,8 @@ IMPORTANT FOR TEAM:
     - castling through check
     - en passant state tracking
     - promotion UI
-Those higher-level rules should go in helper_functions.py and/or ChessController.py.
+Those higher-level rules should go in helper_functions.py and/or
+ChessController.py.
 """
 
 from abc import ABC, abstractmethod
@@ -155,6 +156,9 @@ class King(ChessPiece):
                 target = board.get_piece(c, r)
                 if target is None or target.color != self.color:
                     moves.append((c, r))
+
+        # Add castling moves from the model
+        moves += board.get_castling_moves(col, row, self.color)
         return moves
 
 

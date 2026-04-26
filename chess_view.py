@@ -4,8 +4,8 @@ View class to display GUI of the game.
 
 import os
 import sys
-import pygame
 from abc import ABC, abstractmethod
+import pygame
 
 
 def resource_path(relative_path):
@@ -409,8 +409,8 @@ class PygameChessView(ChessView):
             self.screen, self.BUTTON, self.sandbox_toggle_rect, border_radius=8
         )
         text = self.small_font.render(
-            "Side to move:"
-            f" {'White' if self.board.sandbox_side_to_move == 'w' else 'Black'}",
+            "Side to move: "
+            f"{'White' if self.board.sandbox_side_to_move == 'w' else 'Black'}",
             True,
             self.TEXT,
         )

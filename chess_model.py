@@ -12,7 +12,8 @@ from ChessPiece import Pawn, Knight, Bishop, Queen, King, Rook
 
 def resource_path(relative_path):
     """
-    Return an absolute path for assets both in development and in a PyInstaller build.
+    Return an absolute path for assets both in development and in a PyInstaller
+    build.
     """
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, relative_path)
@@ -223,7 +224,12 @@ class ChessModel:
         self._drag_mouse_pos = None
         self._drag_source = None
 
-        self._en_passant_target = None  # (col, row) of the square a pawn can capture via en passant, or None
+        self._en_passant_target = None  # (col, row) of the square a pawn can
+        # capture via en passant, or None
+        self._castling_rights = {
+            "w": {"kingside": True, "queenside": True},
+            "b": {"kingside": True, "queenside": True},
+        }
 
         self._promotion_pending = None
         self._sandbox_side_to_move = "w"
@@ -262,6 +268,10 @@ class ChessModel:
         self.clear_drag()
         self.clear_promotion()
         self._game_result = None
+        self._castling_rights = {
+            "w": {"kingside": True, "queenside": True},
+            "b": {"kingside": True, "queenside": True},
+        }
 
         back_rank = [Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook]
 
@@ -284,6 +294,10 @@ class ChessModel:
         self.clear_drag()
         self.clear_promotion()
         self._game_result = None
+        self._castling_rights = {
+            "w": {"kingside": True, "queenside": True},
+            "b": {"kingside": True, "queenside": True},
+        }
 
     def setup_chess960(self):
         self._board = [[None] * 8 for _ in range(8)]
@@ -295,6 +309,10 @@ class ChessModel:
         self.clear_drag()
         self.clear_promotion()
         self._game_result = None
+        self._castling_rights = {
+            "w": {"kingside": True, "queenside": True},
+            "b": {"kingside": True, "queenside": True},
+        }
 
         layout = self._generate_960_back_rank()
 
@@ -510,6 +528,10 @@ class ChessModel:
     def en_passant_target(self):
         return self._en_passant_target
 
+    @property
+    def castling_rights(self):
+        return self._castling_rights
+
     # ----------------------------
     # Drag state
     # ----------------------------
@@ -698,13 +720,22 @@ class ChessModel:
         return mapping.get(type(piece), "")
 
     def _format_move_text(
-        self, piece, start_col, start_row, end_col, end_row, captured
+        self,
+        piece,
+        start_col,
+        start_row,
+        end_col,
+        end_row,
+        captured,
+        is_castling=False,
     ):
         start_sq = self.coord_to_alg(start_col, start_row)
         end_sq = self.coord_to_alg(end_col, end_row)
         prefix = self._piece_letter(piece)
 
-        if isinstance(piece, Pawn):
+        if is_castling:
+            move_text = "O-O" if end_col == 6 else "O-O-O"
+        elif isinstance(piece, Pawn):
             if captured:
                 move_text = f"{start_sq[0]}x{end_sq}"
             else:
@@ -732,22 +763,51 @@ class ChessModel:
         captured = target is not None
 
         # --- En passant capture ---
-        # A pawn moving diagonally to an empty square must be capturing en passant
+        # A pawn moving diagonally to an empty square must be capturing en
+        # passant
         is_en_passant = (
             isinstance(piece, Pawn) and end_col != start_col and target is None
         )
         if is_en_passant:
-            # Remove the captured pawn, which sits on the same row as the moving pawn's start
+            # Remove the captured pawn, which sits on the same row as the
+            # moving pawn's start
             self.clear_square(end_col, start_row)
             captured = True
 
         if target is not None:
             self._captured_pieces[target.color].append(target)
 
+        # --- Castling: move the rook to its new square ---
+        is_castling = isinstance(piece, King) and abs(end_col - start_col) == 2
+        if is_castling:
+            back_row = start_row
+            if end_col == 6:  # Kingside
+                rook = self.get_piece(7, back_row)
+                self.set_piece(5, back_row, rook)
+                self.clear_square(7, back_row)
+                if rook:
+                    rook.has_moved = True
+            elif end_col == 2:  # Queenside
+                rook = self.get_piece(0, back_row)
+                self.set_piece(3, back_row, rook)
+                self.clear_square(0, back_row)
+                if rook:
+                    rook.has_moved = True
+
         self.set_piece(end_col, end_row, piece)
         self.set_piece(start_col, start_row, None)
 
         piece.has_moved = True
+
+        # --- Revoke castling rights ---
+        if isinstance(piece, King):
+            self._castling_rights[piece.color]["kingside"] = False
+            self._castling_rights[piece.color]["queenside"] = False
+        if isinstance(piece, Rook):
+            if start_col == 7:
+                self._castling_rights[piece.color]["kingside"] = False
+            elif start_col == 0:
+                self._castling_rights[piece.color]["queenside"] = False
 
         # --- Set en passant target for next move ---
         # Only set when a pawn advances two squares; clear it in all other cases
@@ -797,7 +857,27 @@ class ChessModel:
             fen_rows.append(fen_row)
 
         side = "w" if self._turn == "w" else "b"
-        return "/".join(fen_rows) + f" {side} - - 0 1"
+
+        # Build castling rights string for FEN
+        castling = ""
+        if self._castling_rights["w"]["kingside"]:
+            castling += "K"
+        if self._castling_rights["w"]["queenside"]:
+            castling += "Q"
+        if self._castling_rights["b"]["kingside"]:
+            castling += "k"
+        if self._castling_rights["b"]["queenside"]:
+            castling += "q"
+        if not castling:
+            castling = "-"
+
+        # En passant target square for FEN
+        if self._en_passant_target:
+            ep_col, ep_row = self._en_passant_target
+            ep_sq = self.coord_to_alg(ep_col, ep_row)
+        else:
+            ep_sq = "-"
+        return "/".join(fen_rows) + f" {side} {castling} {ep_sq} 0 1"
 
     def is_in_check(self, color):
         """
@@ -935,3 +1015,64 @@ class ChessModel:
                 self._game_result = "stalemate"
             return True
         return False
+
+    def _is_square_attacked(self, col, row, by_color):
+        """
+        Return True if the given square is attacked by any piece of by_color.
+        """
+        # Temporarily place a king of the opposite color on the square and
+        # check if it would be in check — this reuses all our attack detection
+        original = self.get_piece(col, row)
+        defender_color = "w" if by_color == "b" else "b"
+        temp_king = King(defender_color)
+        self.set_piece(col, row, temp_king)
+        attacked = self.is_in_check(defender_color)
+        self.set_piece(col, row, original)
+        return attacked
+
+    def get_castling_moves(self, col, row, color):
+        """
+        Return castling destination squares for the king at (col, row).
+        Enforces all castling rules:
+        - King and rook must not have moved
+        - Squares between king and rook must be empty
+        - King must not be in check, pass through check, or land in check
+        """
+        moves = []
+        back_row = 0 if color == "w" else 7
+        opponent = "b" if color == "w" else "w"
+
+        if row != back_row or col != 4:
+            return moves  # King is not on its starting square
+
+        if self.is_in_check(color):
+            return moves  # Cannot castle while in check
+
+        # Kingside castling
+        if self._castling_rights[color]["kingside"]:
+            rook = self.get_piece(7, back_row)
+            if (
+                isinstance(rook, Rook)
+                and not rook.has_moved
+                and self.get_piece(5, back_row) is None
+                and self.get_piece(6, back_row) is None
+                and not self._is_square_attacked(5, back_row, opponent)
+                and not self._is_square_attacked(6, back_row, opponent)
+            ):
+                moves.append((6, back_row))
+
+        # Queenside castling
+        if self._castling_rights[color]["queenside"]:
+            rook = self.get_piece(0, back_row)
+            if (
+                isinstance(rook, Rook)
+                and not rook.has_moved
+                and self.get_piece(1, back_row) is None
+                and self.get_piece(2, back_row) is None
+                and self.get_piece(3, back_row) is None
+                and not self._is_square_attacked(3, back_row, opponent)
+                and not self._is_square_attacked(4, back_row, opponent)
+            ):
+                moves.append((2, back_row))
+
+        return moves

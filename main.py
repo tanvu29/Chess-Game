@@ -1,6 +1,6 @@
 from ChessModel import ChessModel
 from ChessView import PygameChessView
-from ChessController import GameController
+from chess_controller import GameController
 
 
 def main():

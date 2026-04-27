@@ -43,7 +43,7 @@ class ChessPiece(ABC):
     def valid_moves(self, col, row, board):
         """
         Check the board for all squares the piece can geometrically move to.
-        
+
         Args:
             col: An int representing the current file position of the piece
             row: An int representing current rank position of the piece
@@ -90,7 +90,7 @@ class ChessPiece(ABC):
         Map each piece to its FEN (Forsyth-Edwards Notation).
 
         Returns:
-            A string representing the FEN symbol of the piece. 
+            A string representing the FEN symbol of the piece.
         """
         mapping = {
             Pawn: "p",
@@ -112,7 +112,7 @@ class Knight(ChessPiece):
         _color: A string representing the color of the piece
         _has_moved: A boolean representing whether the piece has moved
     """
-    
+
     def valid_moves(self, col, row, board):
         candidates = [
             (col + 2, row + 1),
@@ -230,9 +230,6 @@ class Pawn(ChessPiece):
     """
 
     def valid_moves(self, col, row, board):
-        """
-
-        """
         moves = []
 
         direction = 1 if self.color == "w" else -1

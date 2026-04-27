@@ -1034,6 +1034,7 @@ class ChessModel:
             return False
 
         model_copy = copy.deepcopy(self)
+        model_copy._simulating = True          # prevent checkmate scan inside copies
         model_copy.move_piece(start_col, start_row, end_col, end_row)
         if model_copy.is_in_check(piece.color):
             return False
@@ -1139,7 +1140,8 @@ class ChessModel:
 
         opponent = "b" if piece.color == "w" else "w"
         if self.is_in_check(opponent):
-            if not self.has_legal_moves(opponent):
+            # Only call has_legal_moves when NOT inside a simulation copy
+            if not getattr(self, "_simulating", False) and not self.has_legal_moves(opponent):
                 move_text += "#"
             else:
                 move_text += "+"
@@ -1319,6 +1321,7 @@ class ChessModel:
                     king = piece
                     king_r_pos = row
                     king_c_pos = col
+
 
         if king is None:
             raise ValueError(f"No {color} king found on the board.")

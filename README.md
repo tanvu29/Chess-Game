@@ -1,29 +1,16 @@
 Notes: 
-- This README is written for the Windows environment
+- You will need to be on a Windows device to use this program
+- You will need to have Git installed on your computer to clone this repository - if you don't have it yet download here: https://git-scm.com/install/windows
+- The program is run as an executable (.exe). Don't worry, it's not malware.
+  - Biggest reason: This project uses pygame community edition instead of pygame, and we found that bundling the project as an .exe is the best way to include this dependency. We won't make you manually set up a virtual environment and install pygame-ce.
 
-1. Start a Unity session
+Step 1. Clone this repo to your computer
+- Open Command Prompt on your computer. Use the cd command to move into the directory you want to clone this project into.
+- Once inside the directory, run this command: ```git clone https://github.com/tanvu29/Chess-Game.git```
+- You should now see a folder called "Chess-Game"
 
-2. Clone this repo into /work/pi_softdes26_olin_edu/[YOUR DIRECTORY] 
-- If you are not already in this directory, open the terminal and run: cd /work/pi_softdes26_olin_edu/[YOUR DIRECTORY]
-- Once you are in /work/pi_softdes26_olin_edu/[YOUR DIRECTORY], run this command: git clone https://github.com/tanvu29/Chess-Game.git
-- You should now see a folder called "Chess-Game in the Explorer sidebar
-<img width="1424" height="356" alt="image" src="https://github.com/user-attachments/assets/a6b4034e-c488-4f47-8fb9-9a19c3ea3e4d" />
+Step 2. Run main.exe 
+- main.exe is inside of the Chess-Game folder
+- We want to clone the project first because your browser might block you from downloading the .exe file directly from GitHub
 
-3. Make virtual environment
-- In the terminal, run:
-python -m venv venv
-source venv\Scripts\activate       
-pip install -r requirements.txt
-
-
-4. Download Stockfish
-Stockfish is a free and open-source chess engine.
-Download it here: https://stockfishchess.org/download/
-- Select download option for windows - this downloads a zip file called "stockfish-windows-x86-64-avx2.zip"
-- This zip should now be in your Downloads folder. Right click the .zip and select "Extract All"
-- In the menu that pops up, select your Downloads folder as the destination. Click "Extract"
-<img width="700" height="583" alt="image" src="https://github.com/user-attachments/assets/2d8d488d-0313-4d2f-b7dc-202fe8a63e74" />
-- There should now be a folder called "stockfish" in Downloads
-- 
-
-- You should now see a folder called "stockfish" inside of Chess-Game 
+You're all set! Once you run main.exe should see the pygame window appear on your screen :)
